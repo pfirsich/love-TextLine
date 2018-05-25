@@ -5,7 +5,9 @@ local function len_utf8(text)
 end
 
 local function sub_utf8(text, from, to)
-    return text:sub(utf8.offset(text, from), to and utf8.offset(text, to+1)-1 or text:len())
+    assert(from)
+    toByte = to and (utf8.offset(text, to + 1) - 1) or text:len()
+    return text:sub(utf8.offset(text, from), toByte)
 end
 
 local TextLine = {
@@ -24,13 +26,14 @@ end})
 
 function TextLine:initialize(font, x, y, w, h, text)
     self.textObject = love.graphics.newText(font)
-    self:setArea(x, y, w, h)
-    self.text = text or ""
-    self:setCursor(0, 0)
+    self.scroll = 0
+    self.cursor = {0, 0}
+    self.x, self.y = x, y
+    self.width, self.height = w, h
+    self:setText(text or "") -- updates cursor too
 
     -- for drawing
     self.lastShowCursor = false
-    self.scroll = 0
 end
 
 function TextLine:setPosition(x, y)
@@ -40,6 +43,7 @@ end
 function TextLine:setArea(x, y, w, h)
     self.x, self.y = x, y
     self.width, self.height = w, h
+    self:setCursor()
 end
 
 function TextLine:getArea()
@@ -48,18 +52,27 @@ end
 
 function TextLine:setFont(font)
     self.textObject:setFont(font)
+    self:setCursor()
 end
 
 function TextLine:setText(text, selectAll)
     self.text = text
     self.textObject:set(text)
+
+    local len = len_utf8(text)
     if selectAll then
-        self.cursor = {0, len_utf8(text)}
+        self:setCursor(0, len)
+    else
+        self:setCursor(len, len)
     end
 end
 
 function TextLine:getText(from, to)
-    return sub_utf8(self.text, from, to)
+    if from then
+        return sub_utf8(self.text, from, to)
+    else
+        return self.text
+    end
 end
 
 -- self.cursor describes the selected text, with self.cursor[1] being the the visual, blinking cursor
@@ -80,6 +93,16 @@ function TextLine:setCursor(a, b)
         font:getWidth(sub_utf8(self.text, 1, self.cursor[1])),
         font:getWidth(sub_utf8(self.text, 1, self.cursor[2])),
     }
+
+    local cursorX = self.scroll + self.x + self.cursorX[1]
+    local leftOverlap = self.x - cursorX
+    if leftOverlap > 0 then
+        self.scroll = self.scroll + leftOverlap
+    end
+    local rightOverlap = cursorX - (self.x + self.width)
+    if rightOverlap > 0 then
+        self.scroll = self.scroll - rightOverlap
+    end
 end
 
 function TextLine:getSelection()
@@ -100,29 +123,37 @@ function TextLine:paste(text)
 end
 
 function TextLine:skipWord(backwards)
+    local len = len_utf8(self.text)
+    if len == 0 then return end
+
     local function isalphanum(c)
         -- TODO: Make this match more than only the ASCII-alphanums
         -- utf-8/ascii: digits, capital alphas, lower alphas
         return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c < 122)
     end
 
-    local function cursorAlphaNum(offset)
-        return isalphanum(utf8.codepoint(self.text,
-            utf8.offset(self.text, self.cursor[1] + (offset or 0))
-            ))
+    -- if you go backwards, the character left of the cursor (pos n) is character n
+    -- if you go forwards, the character right of the cursor (pos n) is character n + 1
+    local charOffset = backwards and 0 or 1
+    local function cursorAlphaNum()
+        local charPos = self.cursor[1] + charOffset
+        if charPos > utf8.len(self.text) then return false end
+        return isalphanum(utf8.codepoint(self.text, utf8.offset(self.text, charPos)))
     end
 
-    local len = len_utf8(self.text)
-    if len == 0 then return end
-
-    local dir = backwards and -1 or 1
-    local start = cursorAlphaNum(backwards and 0 or 1)
-    while self.cursor[1] >= 0 and self.cursor[1] <= len do
-        if cursorAlphaNum() ~= start then
-            break
+    local start = cursorAlphaNum()
+    if backwards then
+        while self.cursor[1] > 0 do
+            if cursorAlphaNum() ~= start then break end
+            self.cursor[1] = self.cursor[1] - 1
         end
-        self.cursor[1] = self.cursor[1] + dir
+    else
+        while self.cursor[1] < len do
+            if cursorAlphaNum() ~= start then break end
+            self.cursor[1] = self.cursor[1] + 1
+        end
     end
+
     self:setCursor()
 end
 
@@ -138,13 +169,6 @@ function TextLine:draw(selectionColor, drawCursor)
     local textY = self.y + self.height/2 - textH/2
     local cursorX, cursor2X = self.x + self.cursorX[1], self.x + self.cursorX[2]
     local selStartX, selEndX = math.min(cursorX, cursor2X), math.max(cursorX, cursor2X)
-
-    if self.scroll + cursorX < self.x then
-        self.scroll = self.scroll + (self.x - (self.scroll + cursorX))
-    end
-    if self.scroll + cursorX > self.width then
-        self.scroll = self.scroll - (self.scroll + cursorX - (self.x + self.width))
-    end
 
     lg.push()
         lg.translate(self.scroll, 0)
@@ -183,6 +207,8 @@ end
 
 -- if you pass events to TextLine, it is assumed to be in focus.
 -- focus is not handled by this class itself
+
+-- returns true if the text was modified
 function TextLine:keyPressed(key, scanCode, isRepeat)
     local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
     local shift = love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
@@ -215,20 +241,6 @@ function TextLine:keyPressed(key, scanCode, isRepeat)
         end
     end
 
-    if key == "backspace" then
-        if self.cursor[1] == self.cursor[2] then
-            self:moveCursor(true, ctrl, false)
-        end
-        self:paste("")
-    end
-
-    if key == "delete" then
-        if self.cursor[1] == self.cursor[2] then
-            self:moveCursor(false, ctrl, false)
-        end
-        self:paste("")
-    end
-
     if key == "a" and ctrl then
         self:setCursor(len_utf8(self.text), 0)
     end
@@ -240,10 +252,29 @@ function TextLine:keyPressed(key, scanCode, isRepeat)
 
     if ctrl and key == "v" then
         self:paste(love.system.getClipboardText())
+        return true
     end
 
     if ctrl and key == "x" then
         self:paste("")
+        return true
+    end
+
+    -- deletion
+    if key == "backspace" then
+        if self.cursor[1] == self.cursor[2] then
+            self:moveCursor(true, ctrl, false)
+        end
+        self:paste("")
+        return true
+    end
+
+    if key == "delete" then
+        if self.cursor[1] == self.cursor[2] then
+            self:moveCursor(false, ctrl, false)
+        end
+        self:paste("")
+        return true
     end
 end
 
