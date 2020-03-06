@@ -31,9 +31,7 @@ function TextLine:initialize(font, x, y, w, h, text)
     self.x, self.y = x, y
     self.width, self.height = w, h
     self:setText(text or "") -- updates cursor too
-
-    -- for drawing
-    self.lastShowCursor = false
+    self.showCursor = false -- alternates over time
 end
 
 function TextLine:setPosition(x, y)
@@ -157,6 +155,12 @@ function TextLine:skipWord(backwards)
     self:setCursor()
 end
 
+function TextLine:update(dt)
+    local lastShowCursor = self.showCursor
+    self.showCursor = math.cos(love.timer.getTime() * 2.0 * math.pi) > 0
+    return lastShowCursor ~= self.showCursor
+end
+
 function TextLine:draw(selectionColor, drawCursor)
     local lg = love.graphics
     local font = lg.getFont()
@@ -183,16 +187,12 @@ function TextLine:draw(selectionColor, drawCursor)
         lg.setColor(col)
         lg.draw(self.textObject, self.x, textY)
 
-        local showCursor = math.cos(love.timer.getTime() * 2.0 * math.pi) > 0
-        if drawCursor and showCursor then
+        if drawCursor and self.showCursor then
             lg.line(cursorX, self.y, cursorX, self.y + self.height)
         end
-        self.lastShowCursor = showCursor
     lg.pop()
 
     lg.setScissor(unpack(scissorBackup))
-
-    return self.lastShowCursor ~= showCursor
 end
 
 function TextLine:moveCursor(backwards, skipWord, resetSelection)

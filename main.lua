@@ -7,6 +7,10 @@ function love.load()
     love.keyboard.setKeyRepeat(true)
 end
 
+function love.update()
+    textLine:update()
+end
+
 function love.draw()
     love.graphics.setColor({1.0, 1.0, 1.0})
     love.graphics.rectangle("line", textLine.x - 5, textLine.y - 5,
