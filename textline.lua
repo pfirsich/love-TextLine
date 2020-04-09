@@ -211,6 +211,9 @@ end
 -- returns true if the text was modified
 function TextLine:keyPressed(key, scanCode, isRepeat)
     local ctrl = love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
+    if love._os == "OS X" then
+        ctrl = love.keyboard.isDown("lgui") or love.keyboard.isDown("rgui")
+    end
     local shift = love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
 
     if key == "home" then
